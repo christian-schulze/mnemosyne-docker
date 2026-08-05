@@ -11,6 +11,11 @@ _repo_root = Path(__file__).resolve().parent
 if str(_repo_root) not in sys.path:
     sys.path.insert(0, str(_repo_root))
 
+# Ensure the hermes_memory_provider subdirectory is importable
+_hmp_dir = str(_repo_root / "hermes_memory_provider")
+if _hmp_dir not in sys.path:
+    sys.path.insert(0, _hmp_dir)
+
 # Re-export __version__ / __author__ from the inner mnemosyne subpackage so
 # `from mnemosyne import __version__` works in either install layout:
 #   - Hermes plugin tree: outer `mnemosyne/` is the resolved package, inner
@@ -26,10 +31,25 @@ except ImportError:
     __version__ = "unknown"
     __author__ = "Abdias J"
 
+# Expose the memory provider for Hermes memory provider discovery
+# (plugins/memory/__init__.py scans for "register_memory_provider" or
+# "MemoryProvider" in the source text, then loads and calls register().)
+try:
+    from hermes_memory_provider import MnemosyneMemoryProvider as _MnemosyneMemoryProvider
+
+    def register_memory_provider(ctx):
+        """Called by Hermes memory provider discovery system."""
+        ctx.register_memory_provider(_MnemosyneMemoryProvider())
+
+    # Also expose MemoryProvider reference for _is_memory_provider_dir heuristic
+    MemoryProvider = _MnemosyneMemoryProvider
+except ImportError as _import_err:
+    _import_err  # silence unused-variable lint in graceful fallback
+
 # Graceful fallback when Hermes framework is not present
 # (e.g. pip-only / standalone installs without hermes_plugin)
 try:
     from hermes_plugin import register
-    __all__ = ["register", "__version__", "__author__"]
+    __all__ = ["register", "register_memory_provider", "__version__", "__author__"]
 except ImportError:
-    __all__ = ["__version__", "__author__"]
+    __all__ = ["register_memory_provider", "__version__", "__author__"]
