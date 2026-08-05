@@ -49,6 +49,7 @@ except ImportError:
     CallToolResult = None
 
 from mnemosyne.mcp_tools import get_tool_definitions, handle_tool_call
+from mnemosyne import __version__ as _MNEMOSYNE_VERSION
 
 # ---------------------------------------------------------------------------
 # Security helpers (S1)
@@ -95,7 +96,7 @@ async def _run_stdio() -> None:
     if not _MCP_AVAILABLE:
         raise RuntimeError("MCP not installed. Run: pip install mnemosyne-memory[mcp]")
 
-    server = Server("mnemosyne")
+    server = Server("mnemosyne", version=_MNEMOSYNE_VERSION)
 
     @server.list_tools()
     async def list_tools():
@@ -145,7 +146,7 @@ def _build_sse_app(host: str = "127.0.0.1"):
     # /messages/ and Starlette Mount path-prefix matching needs it to
     # agree. Route("/messages") would 404 on every client POST.
     transport = SseServerTransport("/messages/")
-    server = Server("mnemosyne")
+    server = Server("mnemosyne", version=_MNEMOSYNE_VERSION)
 
     @server.list_tools()
     async def list_tools():
