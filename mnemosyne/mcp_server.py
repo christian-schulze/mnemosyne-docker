@@ -101,6 +101,7 @@ except ImportError:
 
 from mnemosyne.mcp_tools import get_tool_definitions, handle_tool_call
 from mnemosyne.runtime_context import set_request_token_name  # noqa: F401 (used in middleware)
+from mnemosyne import __version__ as _MNEMOSYNE_VERSION
 
 # ---------------------------------------------------------------------------
 # Security helpers (S1)
@@ -534,6 +535,7 @@ def _build_mcp_server() -> Server:
 
     return Server(
         "mnemosyne",
+        version=_MNEMOSYNE_VERSION,  # fork delta #7: report the package version, not the mcp lib's
         on_list_tools=_on_list_tools,
         on_call_tool=_on_call_tool,
     )
