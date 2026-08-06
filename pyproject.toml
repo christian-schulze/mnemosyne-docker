@@ -69,6 +69,19 @@ Repository = "https://github.com/mnemosyne-oss/mnemosyne"
 Issues = "https://github.com/mnemosyne-oss/mnemosyne/issues"
 Documentation = "https://github.com/mnemosyne-oss/mnemosyne/blob/main/docs/README.md"
 
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib"
+markers = [
+    "contention: multi-process SQLite contention tests (spawn subprocesses on one shared DB; slower — run in the dedicated contention CI job)",
+]
+# No single test should take five minutes. The cap exists so a deadlock is
+# reported as one named failing test within minutes instead of stalling the
+# job until the workflow timeout, which tells us nothing about where it hung.
+# The signal method fails only the offending test and lets the rest of the
+# suite finish, so a hang still produces a full picture of the run.
+timeout = 300
+timeout_method = "signal"
+
 [project.scripts]
 mnemosyne-install = "mnemosyne.install:main"
 mnemosyne-uninstall = "mnemosyne.install:uninstall_main"
@@ -116,12 +129,3 @@ select = [
   "RUF022",   # checks ordering of existing `__all__` definitions (does NOT require them)
 ]  # NOTE: F covers F63, F7, F82 but NOT E9 — the E9 fatal gate lives in ci.yml only
 
-[tool.pytest.ini_options]
-addopts = "--import-mode=importlib"
-# No single test should take five minutes. The cap exists so a deadlock is
-# reported as one named failing test within minutes instead of stalling the
-# job until the workflow timeout, which tells us nothing about where it hung.
-# The signal method fails only the offending test and lets the rest of the
-# suite finish, so a hang still produces a full picture of the run.
-timeout = 300
-timeout_method = "signal"

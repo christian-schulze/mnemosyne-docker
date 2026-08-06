@@ -35,6 +35,7 @@ from mnemosyne.core.beam import (
     _deferred_commits,
 )
 from mnemosyne.core.journal import journal_mode
+from mnemosyne.core.sqlite_config import configure_busy_timeout
 _thread_local = threading.local()
 
 # Default data directory
@@ -234,7 +235,9 @@ def _get_connection(db_path = None) -> sqlite3.Connection:
         )
         _thread_local.conn.row_factory = sqlite3.Row
         _thread_local.conn.execute(f"PRAGMA journal_mode={journal_mode()}")
-        _thread_local.conn.execute("PRAGMA busy_timeout=5000")
+        # Fork delta (Stage-3): honor MNEMOSYNE_BUSY_TIMEOUT_MS here too. upstream's
+        # shared helper is the single source of truth (default 5000ms).
+        configure_busy_timeout(_thread_local.conn)
         _thread_local.conn.execute("PRAGMA foreign_keys=ON")
         # Load sqlite-vec extension for vector search (matches beam._get_connection)
         try:

@@ -469,6 +469,29 @@ def _env_disabled(name: str) -> bool:
     return val in ("0", "false", "no", "off")
 
 
+def _consolidator_enabled() -> bool:
+    """Single-writer consolidation gate for shared-file multi-agent deployments.
+
+    ``MNEMOSYNE_CONSOLIDATOR`` controls whether THIS process may run
+    sleep()/sleep_all_sessions() consolidation. When several processes share one
+    SQLite file (Hermes' in-process provider plus the container MCP server),
+    designate one as the consolidator:
+
+      - unset             -> enabled (backward compatible: single-process
+                             installs and the in-process provider keep
+                             consolidating exactly as before)
+      - 0/false/no/off    -> disabled: both entry points return
+                             status="skipped" without touching the DB
+      - 1/true/yes/on     -> enabled (explicit designation of the writer)
+
+    Cross-process exclusion of two *enabled* processes is upstream's own: sleep()
+    claims each row atomically via ``consolidation_claimed_at`` and the loser
+    re-reads what it actually owns, so this helper is only the operator control
+    on top of that.
+    """
+    return not _env_disabled("MNEMOSYNE_CONSOLIDATOR")
+
+
 # Derived-memory ranking defaults (#506). Both read the environment at call
 # time rather than at import so config changes take effect without a restart
 # (see #482 for the module-level-constant bug class this avoids).
@@ -12505,6 +12528,17 @@ class BeamMemory:
         sleep_all_sessions, which runs this method once per session and
         therefore takes the census once for the whole pass instead of N times.
         """
+        # Fork gate (Stage-3 single-writer): a process told not to consolidate
+        # must not touch the DB at all (see _consolidator_enabled).
+        if not _consolidator_enabled():
+            return {
+                "status": "skipped",
+                "message": (
+                    "Consolidation disabled for this process: "
+                    "MNEMOSYNE_CONSOLIDATOR=0 (single-writer gate). "
+                    "Designate one process as the consolidator."
+                ),
+            }
         from mnemosyne.core.aaak import encode as aaak_encode
         from mnemosyne.core import local_llm
         from mnemosyne.core.filters import current_write_policy
@@ -13129,6 +13163,25 @@ class BeamMemory:
         When force=True, skips the age cutoff and consolidates all
         non-consolidated working memories across all sessions immediately.
         """
+        # Fork gate (Stage-3 single-writer): see _consolidator_enabled. Reported
+        # with the same counter keys a real pass returns so callers/logs that read
+        # them keep working.
+        if not _consolidator_enabled():
+            return {
+                "status": "skipped",
+                "message": (
+                    "Consolidation disabled for this process: "
+                    "MNEMOSYNE_CONSOLIDATOR=0 (single-writer gate). "
+                    "Designate one process as the consolidator."
+                ),
+                "sessions_scanned": 0,
+                "sessions_consolidated": 0,
+                "items_consolidated": 0,
+                "summaries_created": 0,
+                "llm_used": 0,
+                "errors": 0,
+                "session_results": [],
+            }
         cursor = self.conn.cursor()
         _cutoff_raw = (
             datetime.now(timezone.utc)

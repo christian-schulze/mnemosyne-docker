@@ -31,6 +31,7 @@ import threading
 import time
 import unicodedata
 from mnemosyne.core.journal import journal_mode
+from mnemosyne.core.sqlite_config import configure_busy_timeout
 from datetime import datetime
 from typing import Dict, List, Optional
 from dataclasses import dataclass
@@ -301,7 +302,8 @@ class VeracityConsolidator:
             self.db_path = db_path or Path.home() / ".hermes" / "mnemosyne" / "data" / "mnemosyne.db"
             self.conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             # Apply the same PRAGMA settings BeamMemory's _get_connection
-            # uses (journal_mode per MNEMOSYNE_JOURNAL_MODE, busy_timeout=5000ms). Required for
+            # uses (journal_mode per MNEMOSYNE_JOURNAL_MODE, busy_timeout via
+            # the shared helper). Required for
             # `_serialized_write`'s `BEGIN IMMEDIATE` to behave correctly
             # under contention: without WAL the lock blocks readers; without
             # busy_timeout contention raises `database is locked` instantly
@@ -311,7 +313,9 @@ class VeracityConsolidator:
             # branch-rebase dependency.
             try:
                 self.conn.execute(f"PRAGMA journal_mode={journal_mode()}")
-                self.conn.execute("PRAGMA busy_timeout=5000")
+                # Fork delta (Stage-3): MNEMOSYNE_BUSY_TIMEOUT_MS is honored here
+                # too, through upstream's shared helper (default 5000ms).
+                configure_busy_timeout(self.conn)
             except sqlite3.Error:
                 # Best-effort: in-memory or otherwise-constrained
                 # environments may not support WAL. Continue.
