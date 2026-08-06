@@ -53,8 +53,17 @@ _FASTEMBED_AVAILABLE = _is_fastembed_available()
 # separate ~/.hermes directory when a user relocates HERMES_HOME (e.g. to
 # ~/.config/hermes). Matches the HERMES_HOME handling already used elsewhere
 # in the package (see mcp_tools.py).
+#
+# FASTEMBED_CACHE_PATH (the library-standard env var) is honored between the
+# config key and the HERMES_HOME default. The fork image bakes the embedding
+# model at FASTEMBED_CACHE_PATH at build time; without this the explicit
+# cache_dir= passed to TextEmbedding below would override the library's own
+# env handling, the runtime cache dir would resolve to a non-existent path on
+# the read-only container rootfs, and os.makedirs would raise EROFS (fork
+# Stage 5 fix — makes the image bake actually used at runtime).
 _FASTEMBED_CACHE_DIR = (
     get_str("fastembed_cache_dir", "").strip()
+    or os.environ.get("FASTEMBED_CACHE_PATH", "").strip()
     or os.path.join(
         os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes")),
         "cache",
