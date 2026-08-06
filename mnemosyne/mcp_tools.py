@@ -11,11 +11,12 @@ Usage:
 All imports are guarded — this module loads safely even if mcp is not installed.
 """
 
-from typing import TYPE_CHECKING, Dict, Any, List, TypeAlias
+from typing import TYPE_CHECKING, Dict, Any, List, Optional, TypeAlias
 import json
 import math
 import os
 import sqlite3
+from contextvars import ContextVar
 from pathlib import Path
 
 # Guarded import — MCP is optional
@@ -133,6 +134,21 @@ _SCRATCHPAD_WRITE_SCHEMA = _SchemaProxy("mnemosyne_scratchpad_write")
 _GET_STATS_SCHEMA = _SchemaProxy("mnemosyne_stats")
 
 # ---------------------------------------------------------------------------
+# Server-side identity override (fork Stage 5)
+# ---------------------------------------------------------------------------
+#
+# The MCP SSE server authenticates each connection with a bearer token. When
+# the token is registered in the server's author map (MNEMOSYNE_MCP_AUTHOR_MAP),
+# the server stamps that author_id onto every write from the connection --
+# replacing whatever the client asserts -- so provenance can be trusted.
+# The server sets this contextvar for the lifetime of an authenticated SSE
+# session; handlers read it here so the override flows into every
+# instance-construction path without threading a parameter through 12+
+# tool handlers.
+_AUTHOR_OVERRIDE: "ContextVar[Optional[str]]" = ContextVar("mnemosyne_author_override", default=None)
+
+
+# ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
 
@@ -158,12 +174,18 @@ def _create_instance(session_id: str = None, author_id: str = None,
     ``MnemosyneInstance`` resolves to ``Any`` at runtime so type-hint
     resolution remains side-effect-free, while static checkers use the
     TYPE_CHECKING Mnemosyne alias above.
+
+    Identity precedence (fork Stage 5): the server-side token override
+    (set by the MCP server for author-mapped connections) beats explicit
+    args, which beat the MNEMOSYNE_AUTHOR_ID env var. When no override is
+    active the contextvar default (None) makes this identical to the
+    upstream behaviour.
     """
     # Importing core.memory initializes the legacy default database, so keep it
     # on this mutation-capable construction path rather than at MCP import time.
     from mnemosyne.core.memory import Mnemosyne
 
-    auth = author_id or os.environ.get("MNEMOSYNE_AUTHOR_ID")
+    auth = _AUTHOR_OVERRIDE.get() or author_id or os.environ.get("MNEMOSYNE_AUTHOR_ID")
     auth_type = author_type or os.environ.get("MNEMOSYNE_AUTHOR_TYPE")
     chan = channel_id or os.environ.get("MNEMOSYNE_CHANNEL_ID") or session_id or "default"
     sess = session_id or f"mcp_{bank}"
@@ -517,7 +539,7 @@ def _handle_validate(arguments: Dict[str, Any]) -> Dict[str, Any]:
     memory_id = arguments.get("memory_id", "")
     action = arguments.get("action", "")
     bank = arguments.get("bank", "private")
-    validator = arguments.get("validator") or os.environ.get("MNEMOSYNE_AUTHOR_ID") or "mcp"
+    validator = _AUTHOR_OVERRIDE.get() or arguments.get("validator") or os.environ.get("MNEMOSYNE_AUTHOR_ID") or "mcp"
     new_content = arguments.get("new_content", "")
     note = arguments.get("note", "")
 

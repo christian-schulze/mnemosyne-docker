@@ -31,7 +31,7 @@ import json
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Dict, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -48,7 +48,15 @@ except ImportError:
     TextContent = None
     CallToolResult = None
 
-from mnemosyne.mcp_tools import get_tool_definitions, handle_tool_call
+# Guarded import -- starlette is optional (SSE transport only)
+try:
+    from starlette.responses import JSONResponse
+    _STARLETTE_AVAILABLE = True
+except ImportError:
+    _STARLETTE_AVAILABLE = False
+    JSONResponse = None
+
+from mnemosyne.mcp_tools import get_tool_definitions, handle_tool_call, _AUTHOR_OVERRIDE
 from mnemosyne import __version__ as _MNEMOSYNE_VERSION
 
 # ---------------------------------------------------------------------------
@@ -60,10 +68,120 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "ip6-localhost"})
 
 _TOKEN_ENV = "MNEMOSYNE_MCP_TOKEN"
 
+# Optional JSON object mapping additional bearer tokens to author_ids:
+#   {"<token-a>": "pi", "<token-b>": "omp"}
+# Each key becomes a valid token for SSE auth; the mapped author_id is
+# stamped server-side onto every write from that connection, replacing
+# whatever author_id the client asserts (fork Stage 5). The base
+# MNEMOSYNE_MCP_TOKEN stays valid too -- connections using it keep the
+# legacy client-asserted identity (author override None).
+_AUTHOR_MAP_ENV = "MNEMOSYNE_MCP_AUTHOR_MAP"
+
 
 def _is_loopback(host: str) -> bool:
     """Return True if `host` is a loopback bind that needs no auth."""
     return host.strip().lower() in _LOOPBACK_HOSTS
+
+
+def _parse_author_map(raw: Optional[str]) -> Dict[str, str]:
+    """Parse the MNEMOSYNE_MCP_AUTHOR_MAP env var into {token: author_id}.
+
+    Any parse failure (unset, empty, invalid JSON, non-dict) yields an
+    empty map -- the server still runs with the base token alone. Author
+    ids are stripped; blank entries are dropped.
+    """
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        logger.warning(
+            "Invalid %s (expected JSON object); ignoring author map.",
+            _AUTHOR_MAP_ENV,
+        )
+        return {}
+    if not isinstance(parsed, dict):
+        logger.warning(
+            "Invalid %s (expected JSON object, got %s); ignoring author map.",
+            _AUTHOR_MAP_ENV,
+            type(parsed).__name__,
+        )
+        return {}
+    out = {}
+    for token, author in parsed.items():
+        token_s = str(token).strip()
+        author_s = str(author).strip() if author is not None else ""
+        if token_s and author_s:
+            out[token_s] = author_s
+        elif token_s:
+            logger.warning(
+                "Ignoring author-map entry with empty author_id (token %s...).",
+                token_s[:4],
+            )
+    return out
+
+
+class _BearerTokenMiddleware:
+    """Pure-ASGI bearer auth middleware (fork Stage 5: multi-token + identity).
+
+    ``token_authors`` maps every valid token to its author override: the
+    base MCP token maps to ``None`` (legacy client-asserted identity);
+    mapped tokens map to the author_id the server stamps on every write
+    from that connection.
+
+    Pure-ASGI because BaseHTTPMiddleware buffers the full response body
+    before forwarding it to the client. SseServerTransport writes directly
+    to the raw ASGI send callable, so BaseHTTPMiddleware raises::
+
+        AssertionError: Unexpected message: http.response.start
+
+    on every SSE connect, terminating the stream immediately. This
+    implementation forwards scope/receive/send untouched after auth so
+    SSE frames are never buffered.
+    """
+
+    def __init__(self, app, token_authors: Dict[str, Optional[str]]):
+        self.app = app
+        self.token_authors = token_authors
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        assert JSONResponse is not None  # starlette required for SSE transport
+        header = ""
+        for k, v in scope.get("headers", []):
+            if k == b"authorization":
+                header = v.decode("latin-1")
+                break
+        if not header.startswith("Bearer "):
+            resp = JSONResponse(
+                {"error": "missing bearer token"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            await resp(scope, receive, send)
+            return
+        presented = header[len("Bearer "):].strip()
+        matched = False
+        author = None
+        for valid_token, mapped_author in self.token_authors.items():
+            if hmac.compare_digest(presented, valid_token):
+                matched = True
+                author = mapped_author
+                break
+        if not matched:
+            resp = JSONResponse(
+                {"error": "invalid bearer token"},
+                status_code=401,
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+            await resp(scope, receive, send)
+            return
+        # Stamp the resolved identity so the SSE session handler can set
+        # the author-override contextvar for the connection.
+        scope["_mnemosyne_author_id"] = author
+        await self.app(scope, receive, send)
 
 
 def _resolve_sse_auth(host: str) -> Tuple[bool, Optional[str]]:
@@ -141,6 +259,7 @@ def _build_sse_app(host: str = "127.0.0.1"):
         )
 
     require_auth, token = _resolve_sse_auth(host)
+    author_map = _parse_author_map(os.environ.get(_AUTHOR_MAP_ENV))
 
     # Trailing slash required: SseServerTransport emits POST URIs as
     # /messages/ and Starlette Mount path-prefix matching needs it to
@@ -163,64 +282,36 @@ def _build_sse_app(host: str = "127.0.0.1"):
             return [TextContent(type="text", text=json.dumps({"status": "error", "message": str(e)}, indent=2))]
 
     async def handle_sse(request):
-        async with transport.connect_sse(request.scope, request.receive, request._send) as streams:
-            await server.run(streams[0], streams[1], server.create_initialization_options())
+        # Identity resolution: the bearer middleware stamped the token's
+        # author override onto the scope at connection time. Promote it to
+        # the session-scoped contextvar so every tool call dispatched by
+        # server.run (same task context) writes with the server-side
+        # author_id -- regardless of what the client asserts (fork Stage 5).
+        author_override = request.scope.get("_mnemosyne_author_id")
+        ctx_token = _AUTHOR_OVERRIDE.set(author_override)
+        try:
+            async with transport.connect_sse(request.scope, request.receive, request._send) as streams:
+                await server.run(streams[0], streams[1], server.create_initialization_options())
+        finally:
+            _AUTHOR_OVERRIDE.reset(ctx_token)
         return JSONResponse({})
 
     middleware = []
     if require_auth:
-        expected = token
+        # {valid_token: author_override_or_None}. The base token maps to None
+        # (legacy client-asserted identity); mapped tokens map to the
+        # author_id the server stamps on every write from that connection.
+        assert token is not None  # _resolve_sse_auth raised otherwise
+        token_authors: Dict[str, Optional[str]] = {token: None}
+        token_authors.update(author_map)
 
-        class _BearerTokenMiddleware:
-            """Pure-ASGI bearer auth middleware.
-
-            BaseHTTPMiddleware buffers the full response body before
-            forwarding it to the client. SseServerTransport writes
-            directly to the raw ASGI send callable, so
-            BaseHTTPMiddleware raises:
-              AssertionError: Unexpected message: http.response.start
-            on every SSE connect, terminating the stream immediately.
-
-            This pure-ASGI implementation forwards scope/receive/send
-            untouched after auth so SSE frames are never buffered.
-            """
-
-            def __init__(self, app):
-                self.app = app
-
-            async def __call__(self, scope, receive, send):
-                if scope.get("type") != "http":
-                    await self.app(scope, receive, send)
-                    return
-                header = ""
-                for k, v in scope.get("headers", []):
-                    if k == b"authorization":
-                        header = v.decode("latin-1")
-                        break
-                if not header.startswith("Bearer "):
-                    resp = JSONResponse(
-                        {"error": "missing bearer token"},
-                        status_code=401,
-                        headers={"WWW-Authenticate": "Bearer"},
-                    )
-                    await resp(scope, receive, send)
-                    return
-                presented = header[len("Bearer "):].strip()
-                if not hmac.compare_digest(presented, expected):
-                    resp = JSONResponse(
-                        {"error": "invalid bearer token"},
-                        status_code=401,
-                        headers={"WWW-Authenticate": "Bearer"},
-                    )
-                    await resp(scope, receive, send)
-                    return
-                await self.app(scope, receive, send)
-
-        middleware.append(Middleware(_BearerTokenMiddleware))
+        middleware.append(Middleware(_BearerTokenMiddleware, token_authors=token_authors))
         logger.info(
-            "MCP SSE bearer-token auth enabled (host=%s). Clients must send "
-            "'Authorization: Bearer <token>' on every request.",
+            "MCP SSE bearer-token auth enabled (host=%s, %d mapped author "
+            "tokens). Clients must send 'Authorization: Bearer ***' on every "
+            "request.",
             host,
+            len(author_map),
         )
     else:
         logger.info(
