@@ -312,6 +312,105 @@ def _env_disabled(name: str) -> bool:
     val = os.environ.get(name, "").strip().lower()
     return val in ("0", "false", "no", "off")
 
+
+def _busy_timeout_ms() -> int:
+    """Resolve the SQLite busy_timeout (milliseconds) for new connections.
+
+    ``MNEMOSYNE_BUSY_TIMEOUT_MS`` env override, default 5000 — the
+    spike-proven value (WAL + 5s absorbed 3 concurrent writers plus the
+    consolidator with zero "database is locked" errors across ~4400 writes).
+    Deployments with long consolidation write windows can raise it so
+    concurrent tool calls ride the writer out instead of failing.
+    """
+    try:
+        return int(os.environ.get("MNEMOSYNE_BUSY_TIMEOUT_MS", "5000"))
+    except ValueError:
+        return 5000
+
+
+def _consolidator_enabled() -> bool:
+    """Single-writer consolidation gate for shared-file multi-agent deployments.
+
+    ``MNEMOSYNE_CONSOLIDATOR`` controls whether THIS process may run
+    sleep()/sleep_all_sessions() consolidation. When several processes share
+    one SQLite file (Hermes in-process provider + container MCP server),
+    exactly one must be the consolidator:
+
+      - unset             -> enabled (backward compatible: single-process
+                             installs and Hermes' in-process provider keep
+                             consolidating exactly as before)
+      - 0/false/no/off    -> disabled: sleep() returns status="skipped"
+                             without touching the DB
+      - 1/true/yes/on     -> enabled (explicit designation of the writer)
+
+    See the Stage-3 record in the fork Implementation Plan.
+    """
+    return not _env_disabled("MNEMOSYNE_CONSOLIDATOR")
+
+
+class _ConsolidationLock:
+    """Cross-process, non-blocking, re-entrant consolidation lock.
+
+    Guarantees the single-writer property for sleep(): at most ONE process
+    holds the lock at a time, so overlapping consolidation passes (each with
+    long LLM summarization windows) never run concurrently even when several
+    processes have consolidation enabled (misconfiguration, operator testing).
+    Non-blocking on purpose: the loser of the race skips that pass
+    (returns status="skipped") instead of queueing behind the winner.
+
+    Re-entrant within the owning process via a process-global registry so
+    sleep_all_sessions() -> per-session sleep() does not self-exclude.
+
+    Best-effort only: platforms without ``fcntl`` (Windows) degrade to a
+    no-op lock — the atomic claim in sleep() still prevents double
+    summarization in that case.
+    """
+
+    _HELD: set = set()  # lock file paths held by THIS process
+
+    def __init__(self, db_path):
+        if str(db_path) == ":memory:":
+            self._path = None  # in-memory DB: nothing to lock
+            self._fd = None
+            return
+        self._path = str(Path(db_path).resolve().parent / ".mnemosyne-consolidator.lock")
+        self._fd = None
+
+    def acquire(self) -> bool:
+        if self._path is None:
+            return True  # in-memory DB: no-op lock
+        if self._path in _ConsolidationLock._HELD:
+            return True  # already held by this process (re-entrant)
+        if os.name != "posix":
+            return True  # no flock support: degrade to no-op
+        if not Path(self._path).parent.is_dir():
+            return True  # non-filesystem path (e.g. :memory: variant): no-op
+        fd = None
+        try:
+            import fcntl
+            fd = os.open(self._path, os.O_CREAT | os.O_RDWR, 0o644)
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            if fd is not None:
+                os.close(fd)
+            return False
+        self._fd = fd
+        _ConsolidationLock._HELD.add(self._path)
+        return True
+
+    def release(self) -> None:
+        if self._fd is not None:
+            try:
+                import fcntl
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+            except OSError:
+                pass
+            finally:
+                os.close(self._fd)
+                self._fd = None
+            _ConsolidationLock._HELD.discard(self._path)
+
+
 # Veracity weighting (memory confidence). C29: defaults come from
 # `_VW_DEFAULTS` which mirrors `veracity_consolidation.VERACITY_WEIGHTS`
 # in normal mode and falls back to a hardcoded literal in degraded-import
@@ -471,11 +570,7 @@ def _get_connection(db_path: Path = None) -> sqlite3.Connection:
         # Configurable so deployments with long consolidation write windows
         # can let tool calls ride them out instead of failing with
         # "database is locked" after a hardcoded 5s.
-        try:
-            _busy_ms = int(os.environ.get("MNEMOSYNE_BUSY_TIMEOUT_MS", "5000"))
-        except ValueError:
-            _busy_ms = 5000
-        conn.execute(f"PRAGMA busy_timeout={_busy_ms}")
+        conn.execute(f"PRAGMA busy_timeout={_busy_timeout_ms()}")
         conn.execute("PRAGMA foreign_keys=ON")
         if _SQLITE_VEC_AVAILABLE:
             try:
@@ -8276,7 +8371,40 @@ class BeamMemory:
 
         When force=True, skips the age cutoff and consolidates all
         non-consolidated working memories immediately regardless of age.
+
+        Single-writer gate (shared-file multi-agent deployments): with
+        MNEMOSYNE_CONSOLIDATOR=0 this process must not consolidate —
+        sleep() returns status="skipped" without touching the DB. A
+        cross-process flock additionally guarantees at most one process
+        consolidates at a time even when several have consolidation
+        enabled (the loser returns status="skipped" for that pass).
         """
+        if not _consolidator_enabled():
+            return {
+                "status": "skipped",
+                "message": (
+                    "Consolidation disabled for this process: "
+                    "MNEMOSYNE_CONSOLIDATOR=0 (single-writer gate). "
+                    "Designate one process as the consolidator."
+                ),
+            }
+        lock = _ConsolidationLock(self.db_path)
+        if not lock.acquire():
+            return {
+                "status": "skipped",
+                "message": (
+                    "Consolidation skipped: another process currently holds "
+                    "the consolidator lock (single-writer gate)."
+                ),
+            }
+        try:
+            return self._sleep_impl(dry_run=dry_run, force=force)
+        finally:
+            lock.release()
+
+    def _sleep_impl(self, dry_run: bool = False, force: bool = False) -> Dict:
+        """Consolidation body (see sleep()). Kept separate so the public
+        wrapper can hold the single-writer lock across every exit path."""
         from mnemosyne.core.aaak import encode as aaak_encode
         from mnemosyne.core import local_llm
 
@@ -8594,6 +8722,23 @@ class BeamMemory:
         When force=True, skips the age cutoff and consolidates all
         non-consolidated working memories across all sessions immediately.
         """
+        if not _consolidator_enabled():
+            return {
+                "status": "skipped",
+                "message": (
+                    "Consolidation disabled for this process: "
+                    "MNEMOSYNE_CONSOLIDATOR=0 (single-writer gate). "
+                    "Designate one process as the consolidator."
+                ),
+                "sessions_scanned": 0,
+                "sessions_consolidated": 0,
+                "items_consolidated": 0,
+                "summaries_created": 0,
+                "llm_used": 0,
+                "errors": 0,
+                "model_refresh": {"proposals": 0, "applied": 0},
+                "session_results": [],
+            }
         cursor = self.conn.cursor()
         cutoff = (datetime.now() - timedelta(hours=WORKING_MEMORY_TTL_HOURS // 2)).isoformat()
         if force:

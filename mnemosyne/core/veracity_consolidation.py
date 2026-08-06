@@ -27,6 +27,7 @@ import hashlib
 import logging
 import sqlite3
 import json
+import os
 import threading
 import unicodedata
 from datetime import datetime
@@ -295,7 +296,14 @@ class VeracityConsolidator:
             # branch-rebase dependency.
             try:
                 self.conn.execute("PRAGMA journal_mode=WAL")
-                self.conn.execute("PRAGMA busy_timeout=5000")
+                # busy_timeout honors MNEMOSYNE_BUSY_TIMEOUT_MS (default
+                # 5000ms) so shared-file multi-agent deployments can tune
+                # it without code changes. Mirrors beam._get_connection.
+                try:
+                    _busy_ms = int(os.environ.get("MNEMOSYNE_BUSY_TIMEOUT_MS", "5000"))
+                except ValueError:
+                    _busy_ms = 5000
+                self.conn.execute(f"PRAGMA busy_timeout={_busy_ms}")
             except sqlite3.Error:
                 # Best-effort: in-memory or otherwise-constrained
                 # environments may not support WAL. Continue.

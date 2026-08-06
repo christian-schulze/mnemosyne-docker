@@ -67,6 +67,11 @@ Repository = "https://github.com/AxDSan/mnemosyne"
 Issues = "https://github.com/AxDSan/mnemosyne/issues"
 Documentation = "https://github.com/AxDSan/mnemosyne/blob/main/docs/README.md"
 
+[tool.pytest.ini_options]
+markers = [
+    "contention: multi-process SQLite contention tests (spawn subprocesses on one shared DB; slower — run in the dedicated contention CI job)",
+]
+
 [project.scripts]
 mnemosyne-install = "mnemosyne.install:install"
 mnemosyne-uninstall = "mnemosyne.install:uninstall"
