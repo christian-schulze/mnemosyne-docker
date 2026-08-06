@@ -13,6 +13,8 @@ import os
 import re
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set
 
+from mnemosyne.core.config import get_bool, get_float, get_int, get_str
+
 
 DEFAULT_MODEL_CATEGORIES: Set[str] = {
     "model:user",
@@ -37,11 +39,12 @@ def sleep_model_refresh_enabled() -> bool:
     MNEMOSYNE_SLEEP_MODEL_REFRESH_ENABLED=false as an emergency brake.
     """
 
-    return _env_bool("MNEMOSYNE_SLEEP_MODEL_REFRESH_ENABLED", True)
+    # (Fork delta, issue #482: resolved through central config.)
+    return get_bool("sleep_model_refresh_enabled", True)
 
 
 def _allowed_categories_from_env() -> Set[str]:
-    raw = os.environ.get("MNEMOSYNE_SLEEP_MODEL_REFRESH_CATEGORIES", "").strip()
+    raw = get_str("sleep_model_refresh_categories", "").strip()
     if not raw:
         return set(DEFAULT_MODEL_CATEGORIES)
     categories = {part.strip() for part in re.split(r"[,\s]+", raw) if part.strip()}
@@ -187,8 +190,9 @@ def infer_model_update_proposals(
     try:
         attempted_host, raw = local_llm._try_host_llm(  # internal sibling API used by sleep too
             prompt,
-            max_tokens=int(os.environ.get("MNEMOSYNE_SLEEP_MODEL_REFRESH_MAX_TOKENS", "2048") or "2048"),
-            temperature=float(os.environ.get("MNEMOSYNE_SLEEP_MODEL_REFRESH_TEMPERATURE", "0.1") or "0.1"),
+            # (Fork delta, issue #482: resolved through central config.)
+            max_tokens=get_int("sleep_model_refresh_max_tokens", 2048),
+            temperature=get_float("sleep_model_refresh_temperature", 0.1),
         )
     except Exception:
         attempted_host = False
@@ -225,39 +229,32 @@ def auto_apply_enabled() -> bool:
     MNEMOSYNE_SLEEP_MODEL_REFRESH_AUTO_APPLY=false.
     """
 
-    return _env_bool("MNEMOSYNE_SLEEP_MODEL_REFRESH_AUTO_APPLY", True)
+    # (Fork delta, issue #482: resolved through central config.)
+    return get_bool("sleep_model_refresh_auto_apply", True)
 
 
 def auto_apply_min_confidence() -> float:
-    raw = os.environ.get("MNEMOSYNE_SLEEP_MODEL_REFRESH_AUTO_APPLY_MIN_CONFIDENCE", "0.90")
-    try:
-        return max(0.0, min(1.0, float(raw)))
-    except (TypeError, ValueError):
-        return 0.90
+    # (Fork delta, issue #482: resolved through central config.)
+    raw = get_float("sleep_model_refresh_auto_apply_min_confidence", 0.90)
+    return max(0.0, min(1.0, raw))
 
 
 def auto_apply_min_evidence() -> int:
-    raw = os.environ.get("MNEMOSYNE_SLEEP_MODEL_REFRESH_MIN_EVIDENCE", "2")
-    try:
-        return max(1, int(raw))
-    except (TypeError, ValueError):
-        return 2
+    # (Fork delta, issue #482: resolved through central config.)
+    raw = get_int("sleep_model_refresh_min_evidence", 2)
+    return max(1, raw)
 
 
 def auto_apply_conflict_min_confidence() -> float:
-    raw = os.environ.get("MNEMOSYNE_SLEEP_MODEL_REFRESH_CONFLICT_MIN_CONFIDENCE", "0.98")
-    try:
-        return max(0.0, min(1.0, float(raw)))
-    except (TypeError, ValueError):
-        return 0.98
+    # (Fork delta, issue #482: resolved through central config.)
+    raw = get_float("sleep_model_refresh_conflict_min_confidence", 0.98)
+    return max(0.0, min(1.0, raw))
 
 
 def auto_apply_conflict_min_evidence() -> int:
-    raw = os.environ.get("MNEMOSYNE_SLEEP_MODEL_REFRESH_CONFLICT_MIN_EVIDENCE", "3")
-    try:
-        return max(auto_apply_min_evidence(), int(raw))
-    except (TypeError, ValueError):
-        return 3
+    # (Fork delta, issue #482: resolved through central config.)
+    raw = get_int("sleep_model_refresh_conflict_min_evidence", 3)
+    return max(auto_apply_min_evidence(), raw)
 
 
 _EPHEMERAL_RE = re.compile(

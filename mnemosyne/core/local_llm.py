@@ -15,53 +15,58 @@ import re
 from pathlib import Path
 from typing import List, Optional
 
+from mnemosyne.core.config import get_bool, get_float, get_int, get_str
+
 # --- Config ------------------------------------------------------------------
+# (Fork delta, issue #482: constants resolve through the central config —
+# config.yaml > env var > these code defaults — so config.yaml keys are
+# honored. Previously these read os.environ directly at import.)
 DEFAULT_MODEL_REPO = "openbmb/MiniCPM5-1B-GGUF"
 DEFAULT_MODEL_FILE = "MiniCPM5-1B-Q4_K_M.gguf"
 MODEL_CACHE_DIR = Path.home() / ".hermes" / "mnemosyne" / "models"
 
-LLM_ENABLED = os.environ.get("MNEMOSYNE_LLM_ENABLED", "true").lower() in ("1", "true", "yes")
-LLM_MAX_TOKENS=int(os.environ.get("MNEMOSYNE_LLM_MAX_TOKENS", "2048") or "2048")
-LLM_N_THREADS = int(os.environ.get("MNEMOSYNE_LLM_N_THREADS", "4"))
-LLM_N_CTX = int(os.environ.get("MNEMOSYNE_LLM_N_CTX", "2048"))
+LLM_ENABLED = get_bool("llm_enabled", True)
+LLM_MAX_TOKENS = get_int("llm_max_tokens", 2048)
+LLM_N_THREADS = get_int("llm_n_threads", 4)
+LLM_N_CTX = get_int("llm_n_ctx", 2048)
 
-# Override model via env
-_env_repo = os.environ.get("MNEMOSYNE_LLM_REPO")
-_env_file = os.environ.get("MNEMOSYNE_LLM_FILE")
+# Override model via config/env
+_env_repo = get_str("llm_repo", "")
+_env_file = get_str("llm_file", "")
 if _env_repo and _env_file:
     DEFAULT_MODEL_REPO = _env_repo
     DEFAULT_MODEL_FILE = _env_file
 
 # Remote API config
-LLM_BASE_URL = os.environ.get("MNEMOSYNE_LLM_BASE_URL", "").rstrip("/")
-LLM_API_KEY = os.environ.get("MNEMOSYNE_LLM_API_KEY", "")
-LLM_REMOTE_MODEL = os.environ.get("MNEMOSYNE_LLM_MODEL", "")
-LLM_TIMEOUT = float(os.environ.get("MNEMOSYNE_LLM_TIMEOUT", "60"))
+LLM_BASE_URL = get_str("llm_base_url", "").rstrip("/")
+LLM_API_KEY = get_str("llm_api_key", "")
+LLM_REMOTE_MODEL = get_str("llm_model", "")
+LLM_TIMEOUT = get_float("llm_timeout", 60.0)
 
 # Retryable errors only: 404/400 (model-not-found), 5xx, connection. Not 401/403/429.
 LLM_FALLBACK_MODELS = [
-    m.strip() for m in os.environ.get("MNEMOSYNE_LLM_FALLBACK_MODELS", "").split(",")
+    m.strip() for m in get_str("llm_fallback_models", "").split(",")
     if m.strip()
 ]
-LLM_FALLBACK_BASE_URL = os.environ.get("MNEMOSYNE_LLM_FALLBACK_BASE_URL", "").rstrip("/") or LLM_BASE_URL
-LLM_FALLBACK_API_KEY = os.environ.get("MNEMOSYNE_LLM_FALLBACK_API_KEY", "") or LLM_API_KEY
+LLM_FALLBACK_BASE_URL = get_str("llm_fallback_base_url", "").rstrip("/") or LLM_BASE_URL
+LLM_FALLBACK_API_KEY = get_str("llm_fallback_api_key", "") or LLM_API_KEY
 
 # Host LLM adapter (Hermes or another agent). Disabled by default to preserve
 # existing standalone behavior. When MNEMOSYNE_HOST_LLM_ENABLED=true and a
 # backend is registered via mnemosyne.core.llm_backends.set_host_llm_backend(),
 # the host backend is consulted before the existing remote/local chain.
 # See docs/hermes-llm-integration.md for the full behavior model.
-HOST_LLM_ENABLED = os.environ.get("MNEMOSYNE_HOST_LLM_ENABLED", "false").lower() in ("1", "true", "yes")
-HOST_LLM_PROVIDER = os.environ.get("MNEMOSYNE_HOST_LLM_PROVIDER", "").strip() or None
-HOST_LLM_MODEL = os.environ.get("MNEMOSYNE_HOST_LLM_MODEL", "").strip() or None
-HOST_LLM_TIMEOUT = float(os.environ.get("MNEMOSYNE_HOST_LLM_TIMEOUT", "15"))  # Configurable via env
+HOST_LLM_ENABLED = get_bool("host_llm_enabled", False)
+HOST_LLM_PROVIDER = get_str("host_llm_provider", "").strip() or None
+HOST_LLM_MODEL = get_str("host_llm_model", "").strip() or None
+HOST_LLM_TIMEOUT = float(os.environ.get("MNEMOSYNE_HOST_LLM_TIMEOUT", "15"))  # env-only (no config key)
 # Host context window: local-model-calibrated LLM_N_CTX (2048) is too small for
 # Codex/GPT-class aux models; use this larger budget when the host is the path.
-HOST_LLM_N_CTX = int(os.environ.get("MNEMOSYNE_HOST_LLM_N_CTX", "32000"))
+HOST_LLM_N_CTX = get_int("host_llm_n_ctx", 32000)
 
 # Optional consolidation prompt override. Supports {source}, {memories}, and
 # {memory_count}; unset keeps the historical built-in prompt.
-SLEEP_PROMPT = os.environ.get("MNEMOSYNE_SLEEP_PROMPT", "").strip()
+SLEEP_PROMPT = get_str("sleep_prompt", "").strip()
 
 # --- Lazy singleton ----------------------------------------------------------
 _llm_instance = None
@@ -618,8 +623,8 @@ def summarize_memories(memories: List[str], source: str = "") -> Optional[str]:
                 return cleaned if cleaned else None
             return None
 
-        # 1. Remote API (skip if MNEMOSYNE_FORCE_LOCAL=1 or remote call fails).
-        if LLM_ENABLED and LLM_BASE_URL and not os.environ.get("MNEMOSYNE_FORCE_LOCAL", "").lower() in ("1", "true", "yes"):
+        # 1. Remote API (skip if force_local config/env or remote call fails).
+        if LLM_ENABLED and LLM_BASE_URL and not get_bool("force_local", False):
             raw = _call_remote_llm(prompt)
             if raw:
                 cleaned = _clean_output(raw)

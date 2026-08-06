@@ -33,25 +33,88 @@ logger = logging.getLogger(__name__)
 
 # Keys that require a process restart to take effect.
 # Changing them via config.yaml at runtime will warn but not apply.
+#
+# Fork delta (issue #482): every key that core modules resolve into a
+# module-level constant at import time is restart-only. Previously only a
+# handful were listed and ~50 keys were silently ignored entirely (module
+# constants read os.environ directly). The full import-time set is listed
+# here so `config set`/`config reload` warn honestly. Keys read at call
+# sites (vec_weight, query_intent, ...) are hot-reloadable and NOT listed.
 REQUIRES_RESTART: Set[str] = {
+    # Paths
     "data_dir",
     "db_path",
     "home",
     "shared_db_path",
     "backup_dir",
     "blob_dir",
+    "fastembed_cache_dir",
+    # Embeddings (module-level constants)
     "embedding_model",
     "embedding_dim",
     "embedding_api_url",
-    "fastembed_cache_dir",
+    "embedding_api_key",
     "vec_type",
+    # Beam tiers / lifecycle (module-level constants)
+    "wm_max_items",
+    "wm_ttl_hours",
+    "wm_bump_cap_hours",
+    "wm_pinned_ids",
+    "ep_limit",
+    "sleep_batch",
+    "sp_max",
+    "recency_halflife",
+    "tier2_days",
+    "tier3_days",
+    "tier1_weight",
+    "tier2_weight",
+    "tier3_weight",
+    "smart_compress",
+    "tier3_max_chars",
+    "degrade_batch",
+    # Local LLM (module-level constants)
+    "llm_enabled",
+    "llm_max_tokens",
+    "llm_n_threads",
+    "llm_n_ctx",
     "llm_repo",
     "llm_file",
+    "llm_base_url",
+    "llm_api_key",
+    "llm_model",
+    "llm_timeout",
+    "llm_fallback_models",
+    "llm_fallback_base_url",
+    "llm_fallback_api_key",
+    "sleep_prompt",
+    "host_llm_enabled",
+    "host_llm_provider",
+    "host_llm_model",
+    "host_llm_n_ctx",
+    # Conflict detection (module-level constants)
+    "llm_conflict_detection",
+    "conflict_llm_base_url",
+    "conflict_llm_api_key",
+    "conflict_llm_model",
+    # SHMR (module-level constants)
+    "shmr_batch_size",
+    "shmr_max_iterations",
+    "shmr_similarity_threshold",
+    "shmr_harmony_threshold",
+    "shmr_model",
+    "shmr_min_cluster_size",
+    "shmr_temperature",
+    # Persona (module-level constants)
+    "persona_interval",
+    "persona_daily_sync_hour",
+    "persona_token_cap",
+    # MCP / provider identity (process identity, restart-only)
     "author_id",
     "author_type",
     "channel_id",
     "mcp_bank",
     "default_owner",
+    # Sync (transport config)
     "sync_host",
     "sync_port",
     "sync_remote",
@@ -201,7 +264,7 @@ DEFAULTS: Dict[str, Any] = {
     "embedding_model": "BAAI/bge-small-en-v1.5",
     "embedding_dim": 384,
     "embedding_api_key": "",
-    "embedding_api_url": "",
+    "embedding_api_url": "https://openrouter.ai/api/v1",
     "embeddings_via_api": False,
     "no_embeddings": False,
     "skip_embeddings": False,
@@ -212,15 +275,15 @@ DEFAULTS: Dict[str, Any] = {
     # Recall
     "fts_weight": 0.3,
     "importance_weight": 0.2,
-    "temporal_halflife_hours": 168,
-    "recency_halflife": 168,
+    "temporal_halflife_hours": 24.0,
+    "recency_halflife": 168.0,
     "recall_extra_stopwords": "",
     "cross_session": False,
     "polyphonic_recall": False,
-    "query_intent": True,
-    "fact_recall_enabled": True,
+    "query_intent": False,
+    "fact_recall_enabled": False,
     "enhanced_recall": False,
-    "proactive_linking": True,
+    "proactive_linking": False,
     "lenient_fact_match": False,
     "recall_diagnostics": False,
     # Tiers
@@ -241,8 +304,8 @@ DEFAULTS: Dict[str, Any] = {
     "tier3_max_chars": 300,
     "degrade_batch": 100,
     # LLM
-    "llm_enabled": False,
-    "llm_max_tokens": 512,
+    "llm_enabled": True,
+    "llm_max_tokens": 2048,
     "llm_n_threads": 4,
     "llm_n_ctx": 2048,
     "llm_repo": "",
@@ -250,7 +313,7 @@ DEFAULTS: Dict[str, Any] = {
     "llm_base_url": "",
     "llm_api_key": "",
     "llm_model": "",
-    "llm_timeout": 60,
+    "llm_timeout": 60.0,
     "llm_fallback_models": "",
     "llm_fallback_base_url": "",
     "llm_fallback_api_key": "",
@@ -259,7 +322,7 @@ DEFAULTS: Dict[str, Any] = {
     "host_llm_enabled": False,
     "host_llm_provider": "",
     "host_llm_model": "",
-    "host_llm_n_ctx": 2048,
+    "host_llm_n_ctx": 32000,
     # Conflict detection
     "llm_conflict_detection": False,
     "conflict_llm_base_url": "",
@@ -282,27 +345,27 @@ DEFAULTS: Dict[str, Any] = {
     "sync_turn_assistant_limit": 10,
     # Persona
     "persona_enabled": True,
-    "persona_token_cap": 500,
-    "persona_interval": 10,
+    "persona_token_cap": 1500,
+    "persona_interval": 50,
     "persona_daily_sync_hour": 3,
     # Model refresh
     "sleep_model_refresh_enabled": True,
     "sleep_model_refresh_auto_apply": True,
-    "sleep_model_refresh_categories": "user,workflow,project",
-    "sleep_model_refresh_max_tokens": 1024,
-    "sleep_model_refresh_temperature": 0.3,
-    "sleep_model_refresh_auto_apply_min_confidence": 0.7,
-    "sleep_model_refresh_min_evidence": 3,
-    "sleep_model_refresh_conflict_min_confidence": 0.8,
-    "sleep_model_refresh_conflict_min_evidence": 5,
+    "sleep_model_refresh_categories": "",
+    "sleep_model_refresh_max_tokens": 2048,
+    "sleep_model_refresh_temperature": 0.1,
+    "sleep_model_refresh_auto_apply_min_confidence": 0.9,
+    "sleep_model_refresh_min_evidence": 2,
+    "sleep_model_refresh_conflict_min_confidence": 0.98,
+    "sleep_model_refresh_conflict_min_evidence": 3,
     # SHMR
     "shmr_batch_size": 50,
-    "shmr_max_iterations": 10,
+    "shmr_max_iterations": 3,
     "shmr_similarity_threshold": 0.7,
-    "shmr_harmony_threshold": 0.5,
+    "shmr_harmony_threshold": 0.6,
     "shmr_model": "",
-    "shmr_min_cluster_size": 3,
-    "shmr_temperature": 0.3,
+    "shmr_min_cluster_size": 2,
+    "shmr_temperature": 0.2,
     # Migrations
     "auto_migrate": True,
     # MCP
@@ -310,7 +373,7 @@ DEFAULTS: Dict[str, Any] = {
     "default_owner": "",
     # Filters
     "ignore_patterns": "",
-    "write_classifier": "",
+    "write_classifier": "off",
 }
 
 
@@ -347,9 +410,20 @@ class MnemosyneConfig:
         self._yaml_mtime: float = 0.0
         self._yaml_lock = threading.Lock()
 
-        # Auto-seed config.yaml on first access if it doesn't exist
+        # Fork delta (issue #482): seeding is LAZY for the ambient singleton.
+        # Previously the first get_config() call materialized config.yaml (and
+        # its data dir) on plain module import — a fresh `import
+        # mnemosyne.mcp_tools` created files. Constants now resolve
+        # config-first at import, so seeding at __init__ would touch the
+        # filesystem on every import. The ambient config file is created only
+        # by explicit config writes (set/migrate), keeping the module's
+        # documented contract: "Without a config.yaml file, behavior is
+        # identical to today (env vars only)."
+        # An EXPLICIT config_path still seeds on construction: the caller is
+        # deliberately managing that file (CLI/config tools, tests).
         if not self._config_path.exists():
-            self._seed()
+            if config_path is not None:
+                self._seed()
         else:
             self._warn_legacy_provider_defaults()
 
@@ -630,6 +704,7 @@ class MnemosyneConfig:
 
         Creates the file if it doesn't exist.
         """
+        self._seed()  # no-op if the file already exists
         self._load_yaml()
 
         # Read existing YAML

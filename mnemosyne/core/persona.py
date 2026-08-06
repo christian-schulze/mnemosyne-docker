@@ -21,6 +21,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from mnemosyne.core.config import get_int
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,11 +31,13 @@ PROMOTION_SOURCES = frozenset({"preference", "persona", "stated"})
 MIN_IMPORTANCE_FOR_PROMOTION = 0.7
 
 # Default trigger interval for threshold-based regeneration.
-DEFAULT_INTERVAL = int(os.environ.get("MNEMOSYNE_PERSONA_INTERVAL", "50"))
+# (Fork delta, issue #482: resolved through central config — config.yaml >
+# env var > these code defaults — so config.yaml keys are honored.)
+DEFAULT_INTERVAL = get_int("persona_interval", 50)
 # Daily sync hour (UTC). 0-23. -1 to disable.
-DEFAULT_DAILY_SYNC_HOUR = int(os.environ.get("MNEMOSYNE_PERSONA_DAILY_SYNC_HOUR", "3"))
+DEFAULT_DAILY_SYNC_HOUR = get_int("persona_daily_sync_hour", 3)
 # Token cap for persona.md.
-DEFAULT_TOKEN_CAP = int(os.environ.get("MNEMOSYNE_PERSONA_TOKEN_CAP", "1500"))
+DEFAULT_TOKEN_CAP = get_int("persona_token_cap", 1500)
 
 DEFAULT_PERSONA_FILE = Path(
     os.environ.get(

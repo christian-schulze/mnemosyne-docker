@@ -26,6 +26,7 @@ logger = logging.getLogger(__name__)
 
 from mnemosyne.core import embeddings as _embeddings
 from mnemosyne.core.beam import BeamMemory, init_beam, _busy_timeout_ms
+from mnemosyne.core.config import get_bool, get_str
 _thread_local = threading.local()
 
 # Default data directory
@@ -38,16 +39,18 @@ _DEFAULT_ROOT = Path(
 DEFAULT_DATA_DIR = _DEFAULT_ROOT / "mnemosyne" / "data"
 DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "mnemosyne.db"
 
-# Allow override via environment
-if os.environ.get("MNEMOSYNE_DATA_DIR"):
-    DEFAULT_DATA_DIR = Path(os.environ.get("MNEMOSYNE_DATA_DIR"))
+# Allow override via central config (config.yaml > env). (Fork delta, #482.)
+_cfg_data_dir = get_str("data_dir", "").strip()
+if _cfg_data_dir:
+    DEFAULT_DATA_DIR = Path(_cfg_data_dir)
     DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "mnemosyne.db"
 
 
 def _default_data_dir() -> Path:
-    """Return the current default data directory, honoring runtime env changes."""
-    if os.environ.get("MNEMOSYNE_DATA_DIR"):
-        return Path(os.environ["MNEMOSYNE_DATA_DIR"])
+    """Return the current default data directory, honoring runtime config changes."""
+    d = get_str("data_dir", "").strip()
+    if d:
+        return Path(d)
     return DEFAULT_DATA_DIR
 
 
@@ -440,8 +443,8 @@ class Mnemosyne:
         Supports temporal scoring: temporal_weight, query_time, temporal_halflife.
         Supports scoring weight overrides: vec_weight, fts_weight, importance_weight.
         """
-        import os as _os
-        if _os.environ.get("MNEMOSYNE_ENHANCED_RECALL", "0") == "1":
+        # (Fork delta, issue #482: resolved through central config.)
+        if get_bool("enhanced_recall", False):
             return self.beam.recall_enhanced(query, top_k=top_k,
                                              from_date=from_date, to_date=to_date,
                                              source=source, topic=topic,

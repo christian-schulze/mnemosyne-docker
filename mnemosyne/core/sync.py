@@ -24,6 +24,8 @@ from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any, Tuple
 from urllib.parse import urlparse
 
+from mnemosyne.core.config import get_str
+
 logger = logging.getLogger(__name__)
 
 _ENCRYPTED_WIRE_PREFIX = "mne1:"
@@ -281,8 +283,10 @@ class SyncEncryption:
                             "key_source is neither a file path nor a valid "
                             "base64-encoded key"
                         )
-        elif "MNEMOSYNE_SYNC_KEY" in os.environ:
-            raw = os.environ["MNEMOSYNE_SYNC_KEY"].strip()
+        elif "MNEMOSYNE_SYNC_KEY" in os.environ or get_str("sync_key", ""):
+            # (Fork delta, issue #482: sync_key resolved through central config
+            # (config.yaml > env) as well as the legacy direct env read.)
+            raw = (get_str("sync_key", "") or os.environ.get("MNEMOSYNE_SYNC_KEY", "")).strip()
             key = base64.urlsafe_b64decode(raw)
 
         if key is None:

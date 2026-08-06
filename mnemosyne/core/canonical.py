@@ -60,14 +60,19 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional
 
+from mnemosyne.core.config import get_str
+
 
 # Default DB location. Mirrors BeamMemory's default (the main mnemosyne.db) so a
 # standalone CanonicalStore() lands in the same database the provider wires it
 # into via a shared connection. Resolved at call time so MNEMOSYNE_DATA_DIR is
 # honored without importing beam (avoids a circular import).
 def _default_db_path() -> Path:
-    data_dir = os.environ.get("MNEMOSYNE_DATA_DIR")
-    base = Path(data_dir) if data_dir else (Path.home() / ".hermes" / "mnemosyne" / "data")
+    # (Fork delta, issue #482: data_dir resolved through central config —
+    # config.yaml > env var — honoring MNEMOSYNE_DATA_DIR without importing
+    # beam (avoids a circular import).)
+    data_dir = get_str("data_dir", "")
+    base = Path(data_dir) if data_dir.strip() else (Path.home() / ".hermes" / "mnemosyne" / "data")
     return base / "mnemosyne.db"
 
 

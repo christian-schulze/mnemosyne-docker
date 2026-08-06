@@ -32,8 +32,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Dict
 
+from mnemosyne.core.config import get_str
+
 LEGACY_DATA_DIR = Path.home() / ".hermes" / "mnemosyne" / "data"
-DEFAULT_DATA_DIR = Path(os.environ.get("MNEMOSYNE_DATA_DIR", LEGACY_DATA_DIR))
+# (Fork delta, issue #482: data_dir resolved through central config —
+# config.yaml > env var — with ''/unset keeping the legacy default.)
+DEFAULT_DATA_DIR = Path(get_str("data_dir", "")) if get_str("data_dir", "").strip() else LEGACY_DATA_DIR
 DEFAULT_DB = DEFAULT_DATA_DIR / "triples.db"
 LEGACY_DB = LEGACY_DATA_DIR / "triples.db"
 

@@ -3,7 +3,7 @@ Uses a stub HTTP server so the raw request bytes are asserted (trailing spaces!)
 
 Covers BOTH client branches: the API path (stub HTTP server asserts raw wire
 bytes) and the fastembed path (fake model object records what reaches .embed())."""
-import importlib, json, threading
+import importlib, json, os, threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import pytest
 
@@ -44,6 +44,17 @@ def embeddings_mod(monkeypatch):
     importlib.reload(embeddings)
     yield embeddings
     server.shutdown()
+    # Fork delta (issue #482): the reload re-froze module-level constants
+    # (_DEFAULT_MODEL / EMBEDDING_DIM / _embedding_model) to the test's fake
+    # model for the WHOLE process — every later test's embed path would try to
+    # load "embeddinggemma-300m-q4" via fastembed and fail. Fixture teardown
+    # runs BEFORE monkeypatch's env undo, so pop the vars here, then reload to
+    # restore the real defaults for the rest of the session.
+    for _v in ("MNEMOSYNE_EMBEDDING_MODEL", "MNEMOSYNE_EMBEDDING_DIM",
+               "MNEMOSYNE_EMBEDDING_API_URL", "MNEMOSYNE_EMBEDDING_QUERY_PREFIX",
+               "MNEMOSYNE_EMBEDDING_DOC_PREFIX"):
+        os.environ.pop(_v, None)
+    importlib.reload(embeddings)
 
 def test_query_prefix_byte_exact(embeddings_mod):
     # No cache manipulation: the cache is keyed on the PREFIXED text, so prefix

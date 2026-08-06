@@ -37,6 +37,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from mnemosyne.core.config import get_str
+
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
@@ -187,16 +189,18 @@ def _parse_patterns(raw: str) -> List[str]:
 
 
 def _load_ignore_patterns_from_env() -> List[str]:
-    """Read MNEMOSYNE_IGNORE_PATTERNS env var."""
-    raw = os.environ.get("MNEMOSYNE_IGNORE_PATTERNS", "")
+    """Read ignore_patterns config (config.yaml > env)."""
+    # (Fork delta, issue #482: resolved through central config.)
+    raw = get_str("ignore_patterns", "")
     return _parse_patterns(raw)
 
 
 def _load_classifier_mode() -> str:
-    """Read MNEMOSYNE_WRITE_CLASSIFIER env var. Returns 'off' | 'warn' | 'strict'."""
-    mode = os.environ.get("MNEMOSYNE_WRITE_CLASSIFIER", "off").strip().lower()
+    """Read write_classifier config (config.yaml > env). Returns 'off' | 'warn' | 'strict'."""
+    # (Fork delta, issue #482: resolved through central config.)
+    mode = get_str("write_classifier", "off").strip().lower()
     if mode not in ("off", "warn", "strict"):
-        logger.warning("Unknown MNEMOSYNE_WRITE_CLASSIFIER=%r, defaulting to 'off'", mode)
+        logger.warning("Unknown write_classifier=%r, defaulting to 'off'", mode)
         return "off"
     return mode
 

@@ -5,7 +5,30 @@ Provides fixtures that handle SQLite thread-local connection cleanup
 to prevent "database is locked" and UNIQUE constraint collisions
 between tests, and that default-disable the local LLM so tests don't
 make real CPU inference calls when a model is available on disk.
+
+Fork delta (issue #482): the config bridge now resolves module constants
+through the central config, so the test process must NEVER resolve
+``get_config()`` against the live ``~/.hermes/mnemosyne/config.yaml`` (the
+auto-seed from older releases carries stale values that would silently
+change test behaviour). Point ``MNEMOSYNE_DATA_DIR`` at a throwaway temp
+dir at conftest import time — pytest loads conftest before collecting test
+modules — so the import-time constants resolve against a clean, empty
+config path and no test touches the live store.
+
+Seeding is lazy (fork delta): no config.yaml is materialized unless a test
+explicitly calls ``config.set()``/``migrate``, and the autouse fixture wipes
+it between tests. ``get()`` therefore falls through to env vars — the
+suite's original contract (tests mutate ``MNEMOSYNE_*`` env vars mid-process
+to change behaviour). The config-first path itself is covered by
+``tests/test_config_env_binding.py`` and ``deploy/verify_config_env.py``.
 """
+
+import os
+import tempfile
+from pathlib import Path
+
+_TEST_DATA_DIR = Path(tempfile.mkdtemp(prefix="mnemo-test-config-"))
+os.environ.setdefault("MNEMOSYNE_DATA_DIR", str(_TEST_DATA_DIR))
 
 import pytest
 
@@ -45,9 +68,17 @@ def _close_cached_connections():
     # a later provider test swaps MNEMOSYNE_DATA_DIR to a temporary bank.  Keep
     # that path selection test-local just like the database connection caches;
     # otherwise the later provider reads stale skip_contexts configuration.
+    # Fork delta (issue #482): also wipe any config.yaml a previous test
+    # materialized via config.set()/migrate() so the next test starts from a
+    # clean env-fallback state (config.yaml > env would otherwise leak values
+    # across tests, e.g. a `config.set("proactive_linking", True)` bleeding
+    # into the next test's gates).
     try:
         from mnemosyne.core.config import MnemosyneConfig
         MnemosyneConfig.reset_instance()
+        _cfg_file = _TEST_DATA_DIR / "config.yaml"
+        if _cfg_file.exists():
+            _cfg_file.unlink()
     except Exception:
         pass
 

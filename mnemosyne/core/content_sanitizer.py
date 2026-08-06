@@ -17,6 +17,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
+from mnemosyne.core.config import get_str
+
 
 # --- Detection thresholds ---
 SIZE_HARD_CAP = 1_000_000        # 1 MB — always extract regardless of content type
@@ -31,7 +33,8 @@ DATA_URI_RE = re.compile(
 
 def _blob_root() -> Path:
     """Root directory for content-addressed blobs."""
-    root = os.environ.get("MNEMOSYNE_BLOB_DIR", "")
+    # (Fork delta, issue #482: blob_dir resolved through central config.)
+    root = get_str("blob_dir", "")
     if root:
         return Path(root)
     return Path.home() / ".hermes" / "mnemosyne" / "blobs"

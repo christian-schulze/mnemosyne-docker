@@ -12,21 +12,24 @@ from typing import Optional, Tuple
 from pathlib import Path
 
 from mnemosyne.core.cost_log import log_cost
+from mnemosyne.core.config import get_bool, get_str
 
 logger = logging.getLogger(__name__)
 
-# Gating environment variable (default: off)
-LLM_CONFLICT_DETECTION_ENABLED = os.environ.get("MNEMOSYNE_LLM_CONFLICT_DETECTION", "false").lower() in ("1", "true", "yes")
+# Gating config key (default: off)
+# (Fork delta, issue #482: resolved through central config — config.yaml >
+# env var > these code defaults — so config.yaml keys are honored.)
+LLM_CONFLICT_DETECTION_ENABLED = get_bool("llm_conflict_detection", False)
 
 # Configuration fallback keys (consistent with local_llm.py remote settings)
-LLM_BASE_URL = os.environ.get("MNEMOSYNE_LLM_BASE_URL", "").rstrip("/")
-LLM_API_KEY = os.environ.get("MNEMOSYNE_LLM_API_KEY", "")
-LLM_REMOTE_MODEL = os.environ.get("MNEMOSYNE_LLM_MODEL", "google/gemini-flash-1.5")
+LLM_BASE_URL = get_str("llm_base_url", "").rstrip("/")
+LLM_API_KEY = get_str("llm_api_key", "")
+LLM_REMOTE_MODEL = get_str("llm_model", "") or "google/gemini-flash-1.5"
 
 # Specific overrides if configured
-CONFLICT_LLM_BASE_URL = os.environ.get("MNEMOSYNE_CONFLICT_LLM_BASE_URL", LLM_BASE_URL).rstrip("/")
-CONFLICT_LLM_API_KEY = os.environ.get("MNEMOSYNE_CONFLICT_LLM_API_KEY", LLM_API_KEY)
-CONFLICT_LLM_MODEL = os.environ.get("MNEMOSYNE_CONFLICT_LLM_MODEL", LLM_REMOTE_MODEL)
+CONFLICT_LLM_BASE_URL = get_str("conflict_llm_base_url", "").rstrip("/") or LLM_BASE_URL
+CONFLICT_LLM_API_KEY = get_str("conflict_llm_api_key", "") or LLM_API_KEY
+CONFLICT_LLM_MODEL = get_str("conflict_llm_model", "") or LLM_REMOTE_MODEL
 
 # Pricing catalog (USD per 1M tokens) for cost logging
 # Default pricing fits cheap Flash tier ($0.15 input / $0.60 output)

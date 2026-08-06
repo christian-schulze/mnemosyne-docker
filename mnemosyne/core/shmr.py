@@ -20,17 +20,21 @@ from typing import List, Dict, Optional
 import numpy as np
 
 from mnemosyne.core import embeddings as _embeddings
+from mnemosyne.core.config import get_float, get_int, get_str
 
 logger = logging.getLogger("mnemosyne.shmr")
 
 # --- Config ---
-SHMR_BATCH_SIZE = int(os.environ.get("MNEMOSYNE_SHMR_BATCH_SIZE", "50"))
-SHMR_MAX_ITERATIONS = int(os.environ.get("MNEMOSYNE_SHMR_MAX_ITERATIONS", "3"))
-SHMR_SIMILARITY_THRESHOLD = float(os.environ.get("MNEMOSYNE_SHMR_SIMILARITY_THRESHOLD", "0.70"))
-SHMR_HARMONY_THRESHOLD = float(os.environ.get("MNEMOSYNE_SHMR_HARMONY_THRESHOLD", "0.60"))
-SHMR_MODEL = os.environ.get("MNEMOSYNE_SHMR_MODEL", "")
-SHMR_MIN_CLUSTER_SIZE = int(os.environ.get("MNEMOSYNE_SHMR_MIN_CLUSTER_SIZE", "2"))
-SHMR_TEMPERATURE = float(os.environ.get("MNEMOSYNE_SHMR_TEMPERATURE", "0.2"))
+# (Fork delta, issue #482: constants resolve through the central config —
+# config.yaml > env var > these code defaults — so config.yaml keys are
+# honored. Previously these read os.environ directly at import.)
+SHMR_BATCH_SIZE = get_int("shmr_batch_size", 50)
+SHMR_MAX_ITERATIONS = get_int("shmr_max_iterations", 3)
+SHMR_SIMILARITY_THRESHOLD = get_float("shmr_similarity_threshold", 0.70)
+SHMR_HARMONY_THRESHOLD = get_float("shmr_harmony_threshold", 0.60)
+SHMR_MODEL = get_str("shmr_model", "")
+SHMR_MIN_CLUSTER_SIZE = get_int("shmr_min_cluster_size", 2)
+SHMR_TEMPERATURE = get_float("shmr_temperature", 0.2)
 
 EMBEDDING_DIM = _embeddings.EMBEDDING_DIM  # derived from configured model
 

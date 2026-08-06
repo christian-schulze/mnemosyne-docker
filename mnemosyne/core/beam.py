@@ -23,7 +23,14 @@ import hashlib
 import threading
 import math
 
-from mnemosyne.core.config import resolve_beam_runtime
+from mnemosyne.core.config import (
+    get_bool,
+    get_config,
+    get_float,
+    get_int,
+    get_str,
+    resolve_beam_runtime,
+)
 
 logger = logging.getLogger(__name__)
 from datetime import datetime, timedelta, timezone
@@ -245,15 +252,20 @@ def _env_truthy(name: str) -> bool:
 # Set MNEMOSYNE_BEAM_OPTIMIZATIONS=1 to activate for BEAM benchmarking only.
 _BEAM_MODE = _env_truthy("MNEMOSYNE_BEAM_OPTIMIZATIONS")
 
-if os.environ.get("MNEMOSYNE_DATA_DIR"):
-    DEFAULT_DATA_DIR = Path(os.environ.get("MNEMOSYNE_DATA_DIR"))
+# data_dir is resolved through the central config (config.yaml > env var) so
+# the key is honored in deployments that set it; ''/unset keeps the
+# HERMES_HOME default. (Fork delta, issue #482: previously env-only.)
+_cfg_data_dir = get_str("data_dir", "").strip()
+if _cfg_data_dir:
+    DEFAULT_DATA_DIR = Path(_cfg_data_dir)
     DEFAULT_DB_PATH = DEFAULT_DATA_DIR / "mnemosyne.db"
 
 
 def _default_data_dir() -> Path:
-    """Return the current default data directory, honoring runtime env changes."""
-    if os.environ.get("MNEMOSYNE_DATA_DIR"):
-        return Path(os.environ["MNEMOSYNE_DATA_DIR"])
+    """Return the current default data directory, honoring runtime config changes."""
+    d = get_str("data_dir", "").strip()
+    if d:
+        return Path(d)
     return DEFAULT_DATA_DIR
 
 
@@ -262,38 +274,43 @@ def _default_db_path() -> Path:
     return _default_data_dir() / "mnemosyne.db"
 
 # Config
-# Priority: 1) MNEMOSYNE_EMBEDDING_DIM env var (explicit override)
+# Priority: 1) embedding_dim config/env var (explicit override)
 #           2) Auto-derive from embedding model via _embeddings module
 #           3) 384 (bge-small-en-v1.5 default)
-_emb_dim_env = os.environ.get("MNEMOSYNE_EMBEDDING_DIM")
-if _emb_dim_env is not None:
+# (Fork delta, issue #482: resolved through central config, not raw env.)
+_emb_dim_cfg = get_config().get("embedding_dim")
+if _emb_dim_cfg is not None:
     try:
-        EMBEDDING_DIM = int(_emb_dim_env)
+        EMBEDDING_DIM = int(_emb_dim_cfg)
     except (ValueError, TypeError):
-        EMBEDDING_DIM = 384
+        EMBEDDING_DIM = _embeddings.EMBEDDING_DIM
 else:
     EMBEDDING_DIM = _embeddings.EMBEDDING_DIM
-WORKING_MEMORY_MAX_ITEMS = int(os.environ.get("MNEMOSYNE_WM_MAX_ITEMS", "10000"))
-WORKING_MEMORY_TTL_HOURS = int(os.environ.get("MNEMOSYNE_WM_TTL_HOURS", "168"))
-WM_BUMP_CAP_HOURS = int(os.environ.get("MNEMOSYNE_WM_BUMP_CAP_HOURS", "24"))
+
+# Tier/lifecycle constants are resolved through the central config
+# (config.yaml > env > these code defaults) so config.yaml keys are honored.
+# (Fork delta, issue #482: previously read os.environ directly at import.)
+WORKING_MEMORY_MAX_ITEMS = get_int("wm_max_items", 10000)
+WORKING_MEMORY_TTL_HOURS = get_int("wm_ttl_hours", 168)
+WM_BUMP_CAP_HOURS = get_int("wm_bump_cap_hours", 24)
 WM_PINNED_IDS = set(
-    pid.strip() for pid in os.environ.get("MNEMOSYNE_WM_PINNED_IDS", "").split(",")
+    pid.strip() for pid in get_str("wm_pinned_ids", "").split(",")
     if pid.strip()
 )
-EPISODIC_RECALL_LIMIT = int(os.environ.get("MNEMOSYNE_EP_LIMIT", "50000"))
-SLEEP_BATCH_SIZE = int(os.environ.get("MNEMOSYNE_SLEEP_BATCH", "5000"))
-SCRATCHPAD_MAX_ITEMS = int(os.environ.get("MNEMOSYNE_SP_MAX", "1000"))
-RECENCY_HALFLIFE_HOURS = float(os.environ.get("MNEMOSYNE_RECENCY_HALFLIFE", "168"))  # 1 week default
+EPISODIC_RECALL_LIMIT = get_int("ep_limit", 50000)
+SLEEP_BATCH_SIZE = get_int("sleep_batch", 5000)
+SCRATCHPAD_MAX_ITEMS = get_int("sp_max", 1000)
+RECENCY_HALFLIFE_HOURS = get_float("recency_halflife", 168.0)  # 1 week default
 
 # Tiered episodic degradation
-TIER2_DAYS = int(os.environ.get("MNEMOSYNE_TIER2_DAYS", "30"))
-TIER3_DAYS = int(os.environ.get("MNEMOSYNE_TIER3_DAYS", "180"))
-TIER1_WEIGHT = float(os.environ.get("MNEMOSYNE_TIER1_WEIGHT", "1.0"))
-TIER2_WEIGHT = float(os.environ.get("MNEMOSYNE_TIER2_WEIGHT", "0.5"))
-TIER3_WEIGHT = float(os.environ.get("MNEMOSYNE_TIER3_WEIGHT", "0.25"))
-DEGRADE_BATCH_SIZE = int(os.environ.get("MNEMOSYNE_DEGRADE_BATCH", "100"))
-SMART_COMPRESS = os.environ.get("MNEMOSYNE_SMART_COMPRESS", "1") not in ("0", "false", "no")
-TIER3_MAX_CHARS = int(os.environ.get("MNEMOSYNE_TIER3_MAX_CHARS", "300"))
+TIER2_DAYS = get_int("tier2_days", 30)
+TIER3_DAYS = get_int("tier3_days", 180)
+TIER1_WEIGHT = get_float("tier1_weight", 1.0)
+TIER2_WEIGHT = get_float("tier2_weight", 0.5)
+TIER3_WEIGHT = get_float("tier3_weight", 0.25)
+DEGRADE_BATCH_SIZE = get_int("degrade_batch", 100)
+SMART_COMPRESS = get_bool("smart_compress", True)
+TIER3_MAX_CHARS = get_int("tier3_max_chars", 300)
 
 
 def _env_disabled(name: str) -> bool:
@@ -532,7 +549,7 @@ def _session_scope_params(session_id: str, extra_value=None, *, cross_session: O
     return [session_id]
 
 # Vector compression: float32 | int8 | bit
-VEC_TYPE = os.environ.get("MNEMOSYNE_VEC_TYPE", "int8").lower()
+VEC_TYPE = get_str("vec_type", "int8").lower()
 if VEC_TYPE not in ("float32", "int8", "bit"):
     VEC_TYPE = "float32"
 
@@ -1502,9 +1519,9 @@ def _normalize_weights(vec_weight: Optional[float], fts_weight: Optional[float],
 
     After normalization: vw + fw + iw == 1.0
     """
-    vw = vec_weight if vec_weight is not None else float(os.environ.get("MNEMOSYNE_VEC_WEIGHT", "0.5"))
-    fw = fts_weight if fts_weight is not None else float(os.environ.get("MNEMOSYNE_FTS_WEIGHT", "0.3"))
-    iw = importance_weight if importance_weight is not None else float(os.environ.get("MNEMOSYNE_IMPORTANCE_WEIGHT", "0.2"))
+    vw = vec_weight if vec_weight is not None else get_float("vec_weight", 0.5)
+    fw = fts_weight if fts_weight is not None else get_float("fts_weight", 0.3)
+    iw = importance_weight if importance_weight is not None else get_float("importance_weight", 0.2)
 
     # Clamp to non-negative
     vw = max(0.0, vw)
@@ -1812,7 +1829,7 @@ _FACT_MATCH_STOPWORDS: Set[str] = {
 
 _extra_recall_stopwords = {
     token.strip().lower()
-    for token in re.split(r"[,\s]+", os.environ.get("MNEMOSYNE_RECALL_EXTRA_STOPWORDS", ""))
+    for token in re.split(r"[,\s]+", get_str("recall_extra_stopwords", ""))
     if len(token.strip()) >= 3
 }
 _FACT_MATCH_STOPWORDS.update(_extra_recall_stopwords)
@@ -2144,7 +2161,7 @@ def _find_memories_by_fact(beam: "BeamMemory", query: str) -> List[str]:
 
         query_lower = query.lower()
         query_words = set(query_lower.split())
-        strict_fact_match = not _env_truthy("MNEMOSYNE_LENIENT_FACT_MATCH")
+        strict_fact_match = not get_bool("lenient_fact_match", False)
 
         # Simple keyword matching against fact text
         memory_ids: Set[str] = set()
@@ -3187,7 +3204,7 @@ class BeamMemory:
             return
 
         # Honor opt-out for operators who want explicit migrations only.
-        if os.environ.get("MNEMOSYNE_AUTO_MIGRATE", "1") == "0":
+        if not get_bool("auto_migrate", True):
             # If a migration would be needed, leave a warning so operators
             # see something concrete in their logs.
             try:
@@ -3834,8 +3851,7 @@ class BeamMemory:
         Gated behind MNEMOSYNE_PROACTIVE_LINKING=1 env var.
         Non-blocking — failures never affect memory storage.
         """
-        import os
-        if os.environ.get("MNEMOSYNE_PROACTIVE_LINKING", "0") != "1":
+        if not get_bool("proactive_linking", False):
             return
         if self.episodic_graph is None:
             return
@@ -5616,7 +5632,7 @@ class BeamMemory:
         # so the engine path enforces the same isolation/validity
         # contract as the linear path. /review found that omitting
         # them under flag=ON was a data-isolation regression (P1).
-        if os.environ.get("MNEMOSYNE_POLYPHONIC_RECALL", "0") == "1":
+        if get_bool("polyphonic_recall", False):
             poly_results = self._recall_polyphonic(
                 query, top_k,
                 from_date=from_date, to_date=to_date,
@@ -5676,7 +5692,7 @@ class BeamMemory:
         # deployments that have not explicitly chosen intent-aware recall.
         # If any weight was explicitly passed by the caller, skip intent
         # adjustment -- explicit caller weights win.
-        if (os.environ.get("MNEMOSYNE_QUERY_INTENT", "0") == "1"
+        if (get_bool("query_intent", False)
                 and vec_weight is None and fts_weight is None
                 and importance_weight is None):
             try:
@@ -5715,7 +5731,7 @@ class BeamMemory:
         if temporal_halflife is not None:
             th_halflife = temporal_halflife
         else:
-            th_halflife = float(os.environ.get("MNEMOSYNE_TEMPORAL_HALFLIFE_HOURS", "24"))
+            th_halflife = get_float("temporal_halflife_hours", 24.0)
 
         # [C4] Recall path diagnostics -- lazy import to avoid module-
         # load coupling. Counters are recorded AFTER the per-row
@@ -6768,7 +6784,7 @@ class BeamMemory:
         # into the standard recall output. Gated behind
         # MNEMOSYNE_FACT_RECALL_ENABLED=1 for backward compatibility.
         # Facts carry no session/scope bound and are ranked by confidence.
-        if os.environ.get("MNEMOSYNE_FACT_RECALL_ENABLED", "0") == "1":
+        if get_bool("fact_recall_enabled", False):
             try:
                 fact_rows = self.fact_recall(query, top_k=max(top_k, 10))
                 for fr in fact_rows:
@@ -6846,7 +6862,7 @@ class BeamMemory:
         )
         resolved_weights = _normalize_weights(*raw_weights)
         if (all(weight is None for weight in raw_weights)
-                and os.environ.get("MNEMOSYNE_QUERY_INTENT", "0") == "1"
+                and get_bool("query_intent", False)
                 and classify_intent is not None and adjust_weights is not None):
             try:
                 resolved_weights = adjust_weights(
@@ -6860,7 +6876,7 @@ class BeamMemory:
 
         temporal_halflife = recall_kwargs.get("temporal_halflife")
         if temporal_halflife is None:
-            temporal_halflife = float(os.environ.get("MNEMOSYNE_TEMPORAL_HALFLIFE_HOURS", "24"))
+            temporal_halflife = get_float("temporal_halflife_hours", 24.0)
 
         db_namespace = str(self.db_path.resolve())
         payload = {
@@ -6908,10 +6924,10 @@ class BeamMemory:
                 "embedding_dimension": getattr(_embeddings, "EMBEDDING_DIM", None),
                 "embedding_query_prefix": os.environ.get("MNEMOSYNE_EMBEDDING_QUERY_PREFIX", ""),
                 "beam_optimizations": _BEAM_MODE,
-                "polyphonic_recall": os.environ.get("MNEMOSYNE_POLYPHONIC_RECALL", "0") == "1",
-                "query_intent": os.environ.get("MNEMOSYNE_QUERY_INTENT", "0") == "1",
-                "fact_recall": os.environ.get("MNEMOSYNE_FACT_RECALL_ENABLED", "0") == "1",
-                "lenient_fact_match": _env_truthy("MNEMOSYNE_LENIENT_FACT_MATCH"),
+                "polyphonic_recall": get_bool("polyphonic_recall", False),
+                "query_intent": get_bool("query_intent", False),
+                "fact_recall": get_bool("fact_recall_enabled", False),
+                "lenient_fact_match": get_bool("lenient_fact_match", False),
                 "graph_bonus": not _env_disabled("MNEMOSYNE_GRAPH_BONUS"),
                 "fact_bonus": not _env_disabled("MNEMOSYNE_FACT_BONUS"),
                 "binary_bonus": not _env_disabled("MNEMOSYNE_BINARY_BONUS"),
@@ -6951,8 +6967,7 @@ class BeamMemory:
         Feature-gated by MNEMOSYNE_ENHANCED_RECALL=1 for backward compatibility.
         Without the flag, falls through to original recall() unchanged.
         """
-        import os as _os
-        if _os.environ.get("MNEMOSYNE_ENHANCED_RECALL", "0") != "1":
+        if not get_bool("enhanced_recall", False):
             return self.recall(query, top_k=top_k, **kwargs)
 
 

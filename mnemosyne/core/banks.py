@@ -27,20 +27,26 @@ import sqlite3
 from pathlib import Path
 from typing import List
 
+from mnemosyne.core.config import get_str
+
 # On Fly.io and other ephemeral VMs, only ~/.hermes is persisted.
 _DEFAULT_ROOT = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
 DEFAULT_DATA_DIR = _DEFAULT_ROOT / "mnemosyne" / "data"
 BANKS_DIR = DEFAULT_DATA_DIR / "banks"
 
-if os.environ.get("MNEMOSYNE_DATA_DIR"):
-    DEFAULT_DATA_DIR = Path(os.environ.get("MNEMOSYNE_DATA_DIR"))
+# (Fork delta, issue #482: data_dir resolved through central config —
+# config.yaml > env var — with ''/unset keeping the HERMES_HOME default.)
+_cfg_data_dir = get_str("data_dir", "").strip()
+if _cfg_data_dir:
+    DEFAULT_DATA_DIR = Path(_cfg_data_dir)
     BANKS_DIR = DEFAULT_DATA_DIR / "banks"
 
 
 def _default_data_dir() -> Path:
-    """Return the current default data directory, honoring runtime env changes."""
-    if os.environ.get("MNEMOSYNE_DATA_DIR"):
-        return Path(os.environ["MNEMOSYNE_DATA_DIR"])
+    """Return the current default data directory, honoring runtime config changes."""
+    d = get_str("data_dir", "").strip()
+    if d:
+        return Path(d)
     return DEFAULT_DATA_DIR
 
 
