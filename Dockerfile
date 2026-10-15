@@ -13,7 +13,9 @@
 #     matches host --user $(id -u):$(id -g) (spike finding: root-owned DB ->
 #     host "readonly database")
 #   - baked bge-small-en-v1.5 ONNX embedding model (~65MB) via
-#     FASTEMBED_CACHE_PATH — no runtime download
+#     MNEMOSYNE_FASTEMBED_CACHE_DIR — no runtime download. (The fork's original
+#     FASTEMBED_CACHE_PATH is gone: upstream replaced that variable with
+#     MNEMOSYNE_FASTEMBED_CACHE_DIR, defaulting to <HERMES_HOME>/cache/fastembed.)
 #   - serverInfo.version reports pkg version (3.15.1), not the mcp lib version
 #
 # Build requires fastembed-models/ in the build context (gitignored; populated
@@ -64,7 +66,7 @@ RUN useradd --create-home --shell /bin/bash --uid 1000 mcp
 ENV HOME=/home/mcp
 
 # Bake embedding model (fork delta #3)
-ENV FASTEMBED_CACHE_PATH=/home/mcp/.cache/fastembed
+ENV MNEMOSYNE_FASTEMBED_CACHE_DIR=/home/mcp/.cache/fastembed
 COPY --chown=mcp:mcp fastembed-models/ /home/mcp/.cache/fastembed/
 
 # Default data directory (overridable via MNEMOSYNE_DATA_DIR)
